@@ -1,0 +1,576 @@
+
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Feb 18 10:10:21 2019
+
+@author: carlw
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jan 10 09:12:34 2019
+
+@author: carlw
+"""
+import numpy as np
+import scipy.linalg as sp
+def al(Tinf,h,x,t_in):
+
+
+
+
+    def beta(rhow,rvol,fs,fv):
+        vol_wt = np.divide(fv,fs+fv,where = fs+fv != 0)
+        sol_wt = np.divide(fs,fs+fv,where = fs+fv != 0)
+        beta = sol_wt  + vol_wt*rhow/rvol
+        return beta
+
+    def kn_secondary_oil(T,Oout, rhow, dt):
+        """
+        Kinetic reactions for biomass pyrolysis of a woody particle. Kinetic scheme
+        from Sadhukhan 2009 paper.
+        Example:
+            B[i], C1[i], C2[i], g = kn(T, B, C1, C2, rhow, dt, i, H)
+        Inputs:
+            T = temperature, K
+            B = mass fraction of biomass, (-)
+            C1 = mass fraction of char 1, (-)
+            C2 = mass fraction of char 2, (-)
+            rhow = density of wood, kg/m^3
+            dt = time step, s
+            i = row index
+            H = heat of reaction, J/kg
+        Output:
+            B[i] = biomass mass fraction vector for row index i
+            C1[i] = char 1 mass fraction vector for row index i
+            C2[i] = char 2 mass fraction vector for row index i
+            g = heat generation, W/m^3
+        """
+
+        import numpy as np
+        R = 0.008314 # universal gas constant, kJ/mol*K
+
+        #INITIAL -> Does work
+
+        # A as pre-factor (1/s) and E as activation energy (kJ/mol)
+
+        Ac2 = 1e5;        Ec2 = 108 ;        # tar -> char
+        Ag2 = 4.28e6;             Eg2 = 108;         # tar -> gas
+
+        # evaluate reaction rate constant for each reaction, 1/s
+        Kg2 = Ag2 * np.exp(np.divide(-Eg2 , (R*T))) # tar -> gas
+        Kc2 = Ac2 * np.exp(np.divide(-Ec2 , (R*T))) # tar -> char
+
+
+
+        # reaction rates as mass fraction basis
+
+        rC = Kc2*Oout   # char rate
+        rGa = Kg2*Oout            # gas rate
+        rO = - (Kc2+Kg2)*Oout  # Tar rate
+
+        # update biomass and char mass fractions, (-)
+        Oaoutnew = (Oout + rO*dt)
+        if np.any(Oaoutnew <0):
+
+
+            while len(Oaoutnew[Oaoutnew <0]) !=0:
+
+                Kg2 = Kg2*(1-0.05 -np.abs(np.min(Oaoutnew)))
+                Kc2 = Kc2*(1-0.05 -np.abs(np.min(Oaoutnew)))
+
+                rO = - (Kc2+Kg2)*Oout
+                rGa = Kg2*Oout
+                rC = Kc2*Oout
+                Oaoutnew = (Oout + rO*dt)
+
+        Gaoutnew = rGa*dt
+
+        Cnew = (rC*dt)
+
+
+
+        # calculate heat of generation term
+
+        hc2 = -42
+        hg2 = -42
+        g =  -(rC*(hc2)*dt*rhow - rGa*(hg2)*dt*rhow)           # heat generation                              # NEED CHANGING SEE MODEL ARTICLE P.92
+        g = g*1000
+
+        return Cnew,Oaoutnew,Gaoutnew, g
+
+    ##################################################################################
+    ##################################################################################
+    def kn(T,B, Is, C, O,G,X,Oout,Gout, rhow, dt, i,bet,e,):
+        """
+        Kinetic reactions for biomass pyrolysis of a woody particle. Kinetic scheme
+        from Sadhukhan 2009 paper.
+        Example:
+            B[i], C1[i], C2[i], g = kn(T, B, C1, C2, rhow, dt, i, H)
+        Inputs:
+            T = temperature, K
+            B = mass fraction of biomass, (-)
+            C1 = mass fraction of char 1, (-)
+            C2 = mass fraction of char 2, (-)
+            rhow = density of wood, kg/m^3
+            dt = time step, s
+            i = row index
+            H = heat of reaction, J/kg
+        Output:
+            B[i] = biomass mass fraction vector for row index i
+            C1[i] = char 1 mass fraction vector for row index i
+            C2[i] = char 2 mass fraction vector for row index i
+            g = heat generation, W/m^3
+        """
+
+
+        R = 0.008314 # universal gas constant, kJ/mol*K
+
+        #INITIAL -> Does work
+
+        # A as pre-factor (1/s) and E as activation energy (kJ/mol)
+        Ao = 1.08e10;         Eo = 148;    # biomass -> tar
+        Ag = 4.38e9;         Eg = 152.7;     # biomass -> gas
+        Ais = 3.75e6;         Eis = 111.7   #biomass -> intermediat solid
+        Ac = 1.38e10;          Ec = 161;    # biomass -> char
+        Ac2 = 1e5;        Ec2 = 108 ;        # tar -> char
+        Ag2 = 4.28e6;             Eg2 = 108;         # tar -> gas
+
+
+        # evaluate reaction rate constant for each reaction, 1/s
+        Kg = Ag * np.exp(np.divide(-Eg , (R*T[i]),where = T[i]>1),where = T[i]>1)    # biomass -> (vol+gas)
+        Ko = Ao * np.exp(np.divide(-Eo , (R*T[i]),where = T[i]>1),where = T[i]>1)    # biomass -> char
+        Kc = Ac * np.exp(np.divide(-Ec , (R*T[i]),where = T[i]>1),where = T[i]>1)     # (vol+gas) + char -> (vol+gas)2 + char2
+        Kg2 = Ag2 * np.exp(np.divide(-Eg2 , (R*T[i]),where = T[i]>1),where = T[i]>1) # tar -> gas
+        Kc2 = Ac2 * np.exp(np.divide(-Ec2 , (R*T[i]),where = T[i]>1),where = T[i]>1)  # tar -> char
+        Kis = Ais * np.exp(np.divide(-Eis , (R*T[i]),where = T[i]>1),where = T[i]>1)  # char2
+        kx = np.divide(X[0] , (1 + np.exp(-(T[i]-273-90)*0.096)), where = (1 + np.exp(-(T[i]-273-90)*0.096) != 0))
+
+        e_bet = np.divide(e,bet,where = bet != 0)
+
+        # reaction rates as mass fraction basis
+        rB = -(Kg+Ko+Kis) * B[i-1]          # biomass rate
+        rC = Kc*Is[i-1] + Kc2*O[i-1]    # char rate
+        rGa = Kg * B[i-1]*e_bet + Kg2*O[i-1]             # gas rate
+        rO = Ko*B[i-1]*e_bet - (Kc2+Kg2)*(O[i-1])  # Tar rate
+        rIs = Kis*B[i-1] - Kc*Is[i-1]
+        rOout = Ko*B[i-1]
+        rGaout = Kg*B[i-1]
+        # update biomass and char mass fractions, (-)
+        #Onew = np.divide((O[i-1] + rO*dt),(1+(bet-e)), where = (1+(bet-e)) != 0)*(T[i]>0)
+        #Ganew = np.divide((G[i-1] + rGa*dt),(1+(bet-e)), where = (1+(bet-e)) != 0)*(T[i]>0)
+
+
+        Bnew = (B[i-1] + rB*dt)*(T[i]>0)
+
+        Isnew = (Is[i-1] + rIs*dt)*(T[i]>0)
+        Xnew = X[0]*(T[i]>0)-kx*(T[i]>0)
+        if np.any(Bnew < 0):
+            j = 0
+            Bool = Bnew<0
+            while np.min(Bnew) !=0:
+                j+=1
+                Kg[Bool] = Kg[Bool]*(1-0.03 -np.abs(np.min(Bnew)))
+                Ko[Bool] = Ko[Bool]*(1-0.03 -np.abs(np.min(Bnew)))
+                Kis[Bool] =Kis[Bool]*(1-0.03 -np.abs(np.min(Bnew)))
+                rB = -(Kg+Ko+Kis) * B[i-1]
+                Bnew = (B[i-1] + rB*dt)*(T[i]>0)
+
+            rO = Ko*B[i-1]*e_bet - (Kc2+Kg2)*(O[i-1])
+            rGa = Kg * B[i-1]*e_bet + Kg2*O[i-1]
+            rIs = Kis*B[i-1] - Kc*Is[i-1]
+            rOout = Ko*B[i-1]
+            rGaout = Kg*B[i-1]
+            Isnew = (Is[i-1] + rIs*dt)*(T[i]>0)
+
+        if np.any(Isnew < 0):
+            Bool = Isnew<0
+            while np.min(Isnew) !=0:
+                Kc[Bool] = Kc[Bool]*(1-0.03 -np.abs(np.min(Isnew)))
+                rIs = Kis*B[i-1] - Kc*Is[i-1]
+                rC = Kc*Is[i-1] + Kc2*O[i-1]
+                Isnew = (Is[i-1] + rIs*dt)
+                Cnew = (C[i-1] + rC*dt)
+        Xnew[X[i-1]<Xnew] = X[i-1][X[i-1]<Xnew]
+        rX = X[i-1]-Xnew
+        Onew = O[i-1]+rO*dt- e_bet*Kg2*dt*(O[i-1]) - e_bet*Kg2*dt*O[i-1]
+        if np.any(Onew < 0):
+            Bool = Onew<0
+            while np.min(Onew) != 0:
+                Kc2[Bool] = Kc2[Bool]*(1-0.03 -np.abs(np.min(Onew)))
+                Kg2[Bool] = Kg2[Bool]*(1-0.03 -np.abs(np.min(Onew)))
+                rO = Ko*B[i-1]*e_bet - (Kc2+Kg2)*(O[i-1])
+                rC = Kc*Is[i-1] + Kc2*O[i-1]
+                rGa = Kg * B[i-1]*e_bet + Kg2*O[i-1]
+                Onew = O[i-1]+rO*dt- e_bet*Kg2*dt*(O[i-1]) - e_bet*Kg2*dt*O[i-1]
+        ####### ADDING NAN FILTER ######
+        Gaoutnew = (Gout[i-1] + rGaout*dt)
+        Oaoutnew = (Oout[i-1] + rOout*dt)
+        Cnew = (C[i-1] + rC*dt)*(T[i]>0)
+        Onew = O[i-1]+rO*dt- e_bet*Kg2*dt*(O[i-1]) - e_bet*Kg2*dt*O[i-1]
+        Ganew = G[i-1] + rGa*dt +  e_bet*Kg2*dt*(O[i-1])
+
+
+        Onew[np.isnan(Onew)] = 0; Ganew[np.isnan(Ganew)] = 0; Oaoutnew[np.isnan(Oaoutnew)] = 0
+        Gaoutnew[np.isnan(Gaoutnew)] = 0; Bnew[np.isnan(Bnew)] = 0; Cnew[np.isnan(Cnew)] = 0
+        Isnew[np.isnan(Isnew)] = 0
+
+
+    #    Xnew[Xnew<=0] =0
+    #    rX[rX < 0] = 0
+    #    Ganew[Ganew < 0] = 0
+    #    Onew[Onew <=0] = 0
+    #    Bnew[Bnew<=0] =0
+    #    Cnew[Cnew <= 0] = 0
+    #    Isnew[Isnew <= 0] = 0
+        # calculate heat of generation term
+        hc = -300    # Heat of char production
+        ho = 80    # Heat of oil production
+        hg = 80    # Heat of gas production
+        his = 80    # Heat of intermediate solid production
+        hc2 = -42   # Heat of oil to char
+        hg2 = -42   # Heat of oil to gas
+        hw = -2256    # Heat of evaporization
+
+
+        g = (-(Ko*B[i-1]*e_bet*ho + Kg * B[i-1]*e_bet*hg + Kis * B[i-1]*his)*dt - Kc*Is[i-1]*(hc)*dt - Kc2*O[i-1]*(hc2)*dt - Kg2*O[i-1]*(hg2)*dt)*rhow  + (rX)*hw *1000/dt              # heat generation                              # NEED CHANGING SEE MODEL ARTICLE P.92
+                      # heat generation
+        g = g*1000
+
+        # return the biomass and char mass fractions and heat of generation
+
+        return Bnew,Isnew, Cnew, Onew,Ganew,Xnew,Oaoutnew,Gaoutnew, g
+
+
+
+
+    def hc(m, dr, b, dt, h, Tinf, g, T, i, r, pbar, cpbar, kbar):
+        """
+        1D transient heat conduction within a solid sphere, cylinder, or slab shape
+        with convection at the surface and symmetry at center. Returns an array of
+        temperatures [T] at each intraparticle node point.
+        Solves system of equations [A]*[x] = [b] where:
+        A = known coefficent matrix, tridiagonal for 1-D problem
+        x = unknown vector, next temperature at each node
+        b = known vector, current temperature at each node
+        Example:
+        T = hc(m, dr, b, dt, h, Tinf, g, T, i, r, pbar, cpbar, kbar)
+        where:
+        m = number of nodes from center (m=0) to surface (m)
+        dr = radius step, m
+        b = shape factor where 2 is sphere, 1 is cylinder, 0 is slab
+        dt = time step, s
+        h = heat transfer coefficient, W/m^2*K
+        Tinf = ambient temperature, K
+        g = heat generation
+        T = temperature at node
+        i = time index
+        r = radius of particle, m
+        pbar = effective density or concentration
+        cpbar = effective heat capacity, J/kg*K
+        kbar = effective thermal conductivity, W/m*K
+        """
+
+        ab = np.zeros((3, m))   # banded array from the tridiagonal matrix
+        bb = np.zeros(m)        # column vector
+
+        k = np.arange(1, m-1)
+        ri = (k * dr)**b
+        rminus12 = ((k-0.5) * dr)**b
+        rplus12 = ((k+0.5) * dr)**b
+
+        v = dt / (pbar[0] * cpbar[0])
+
+        # create internal terms
+        kminus12 = (kbar[k] + kbar[k-1])/2
+        kplus12 = (kbar[k] + kbar[k+1])/2
+        w = dt / (pbar[k] * cpbar[k] * ri * (dr**2))
+        z = dt / (pbar[k] * cpbar[k])
+
+        # create surface terms
+        ww = dt / (pbar[m-1] * cpbar[m-1])
+        krminus12 = (kbar[m-1] + kbar[m-2])/2
+
+        # upper diagonal
+        ab[0, 1] = -(2 * v * kbar[0] * (1+b)) / (dr**2)     # center node T1
+        ab[0, 2:] = -w * rplus12 * kplus12                  # internal nodes Tm+1
+
+        # center diagonal
+        ab[1, 0] = 1 + (2* v * kbar[0] * (1+b)) / (dr**2)                         # center node T0
+        ab[1, 1:m-1] = 1 + w * rminus12 * kminus12 + w * rplus12 * kplus12        # internal nodes Tm
+        ab[1, m-1] = 1 + (2*ww/(dr**2)) * krminus12 + ww * ((2/dr) + (b/r))*h     # surface node Tr
+
+        # lower diagonal
+        ab[2, 0:m-2] = -w * rminus12 * kminus12     # internal nodes Tm-1
+        ab[2, m-2] = -(2*ww/(dr**2)) * krminus12    # surface node Tr-1
+
+        # column vector
+        bb[0] = T[i-1, 0] + v*g[0]                                       # center node T0
+        bb[1:m-1] = T[i-1, k] + z*g[k]                                   # internal nodes Tm
+        bb[m-1] = T[i-1, m-1] + ww*((2/dr)+(b/r))*h*Tinf + ww*g[m-1]     # surface node Tr
+
+        # temperatures
+        T = sp.solve_banded((1, 1), ab, bb)
+
+        return T
+
+
+
+
+
+
+
+
+
+
+
+    d = 1e-3        # wood particle diameter, m
+    rhow = 630      # density of wood, kg/m^3
+    rvol = 1.3      # density volatiles kg/m3
+
+    volatiles_inside_time = t_in # seconds before volatiles gets cooled
+
+
+    Ti = 285        # initial particle temp, K
+    #Tinf = 900      # ambient temp, K
+    #h = 1000        # heat transfer coefficient, W/m^2*K
+    #x = 10
+
+    nt = 10000*5                     # number of time steps
+    from sklearn.ensemble import RandomForestRegressor
+    RFR = RandomForestRegressor(n_estimators = 100)
+    import pickle
+    filename1 = r'C:\Users\carlw\Desktop\Master\RESULTS\test.pkl'
+    with open(filename1, 'rb') as f:
+        raw = pickle.load(f)
+    time_h = []
+    for i in raw.index:
+        i = i[1:]
+        i = i[:-1]
+        i = i.split(',')
+        i[0] = float(i[0])
+        i[1] = float(i[1])
+        time_h.append(i)
+    time_h = np.array(time_h)
+    train_time = np.log(raw['Time until 0.1% biomass left[sec]'].values.astype(float))
+    mod = RFR.fit(time_h,train_time)
+
+    data = np.array([Tinf,h]).reshape(1,-1)
+    tmax = np.exp(float(mod.predict(np.array(data))*1.2))                  # max time, s
+    print(tmax)
+    dt = tmax/nt                   # time step, s
+    t = np.arange(0, tmax+dt, dt)   # time vector
+
+    nr = 99    # number or radius steps
+    r = d/2     # radius of particle, m
+    #print( 4/3*3.14*r**3*682*1000*1000)
+    dr = r/nr   # radius step, delta r
+    m = nr+1    # nodes from center m=0 to surface m=steps+1
+
+    # 1-D Transient Heat Conduction
+    # -----------------------------------------------------------------------------
+
+
+    v = 3/4*np.pi*(d/2)**3     # volume of cylinder, m^3
+
+
+    r = d/2     # radius of particle, m
+    dr = r/nr   # radius step, delta r
+
+    T = np.zeros((len(t), m))
+    T[0] = Ti
+
+    # density array
+    # rows = time step, columns = node points from center to surface
+
+    pw = np.zeros((len(t), m))      # create array for wood density
+    pc = np.zeros((len(t), m))      # create array for char density
+    pg = np.zeros((len(t), m))      # create array for gas density
+    px = np.zeros((len(t), m))
+    pw[0] = (100-x)*rhow/100                 # initial wood density at all nodes
+
+    # mass fraction array
+    X = np.ones((len(t), m))*x/100
+    B = np.ones((len(t), m))*(1-x/100)
+    Is = np.zeros((len(t), m))
+    C = np.zeros((len(t), m))
+    G = np.zeros((len(t), m))
+    O = np.zeros((len(t), m))
+    Oout = np.zeros((len(t), m))
+    Gout = np.zeros((len(t), m))
+    Final_oil = np.zeros((len(t),m))
+    Final_gas = np.zeros((len(t),m))
+    gOil = np.zeros((len(t),m))
+    heatEnergy = np.zeros((len(t),m))
+    # mass fraction vector
+    # columns = average mass fraction of entire solid at a time step
+    Ys = np.ones((len(t),m))*(100-x)/100   # create row vector for mass fraction, Ys=1 for all wood
+    Yv = np.zeros((len(t),m))
+    Yw = pw[0]/rhow     # wood fraction, Yw=1 all wood, Yw=0 all char
+    por  = 1-(Yw/Ys[0])*(1-0.4)
+
+
+
+
+    cpw = 1500 + 1*T[0]   # wood heat capacity, J/(kg*K)
+    kw_dsvH =  (0.1046 + 2*0.255)/3   # wood thermal conductivity, W/(m*K)
+
+    cpc = 420 + 2.09 * T[0] + 6.85*10**-4*T[0]**2   # char heat capacity, J/(kg*K)
+    kc =0.8    # char thermal conductivity, W/(m*K)
+
+    cpo = -100+4.4*T[0]-1.57e-3*T[0]**2
+    ko = 0.055
+
+    cpg = 770 + 0.629*T[0] -1.91*1e-4*T[0]**2
+    kg = 0.08
+
+    kv = (kg+ko)/2
+
+    cpx = 4180
+    kx = 0.6
+
+    cpbar = Yw*cpw + (1-Yw)*cpc + por*cpg*G[0] + por*cpo*O[0] + 4180*X[0]     # effective heat capacity
+    kbar = Yw*kw_dsvH + (1-Yw)*kc + por*kv*(G[0]+O[0]) + kx*X[0]      # effective thermal conductivity
+    pbar = pw[0] + pc[0]  + X[0]*1000                   # effective density
+
+    g = np.ones((len(t),m))*(1e-10)  # assume initial heat generation is negligible
+    counter = True
+    # solve system of equations [A]{T}={C} where T = AC for each time step
+    for i in range(1, nt):
+
+        # heat conduction
+        T[i] = hc(m, dr, 0, dt, h, Tinf, g[i-1], T, i, r, pbar, cpbar, kbar)
+        if np.mean(T[i]) >= Tinf and counter == True:
+            Time_to_max_temp = i*dt
+            counter = False
+        heatEnergy[i] = cpbar*pbar*(T[i-1]-T[i])
+        bet = beta(rhow,rvol,Ys[i-1],Yv[i-1])
+        # kinetic reactions
+        B[i],Is[i], C[i], O[i],G[i],X[i],Oout[i],Gout[i], g[i] = kn(T,B,Is, C, O,G,X,Oout,Gout, rhow, dt, i,bet,por)
+        Final_gas[i] += G[i]-G[i-1]
+        # update thermal propertie
+        cpw = 1500 + 1*T[i]   # wood heat capacity, J/(kg*K)
+        kw_dsvH =  (0.1046 + 2*0.255)/3    # wood thermal conductivity, W/(m*K)
+
+        cpc = 420 + 2.09 * T[i] + 6.85*10**-4*T[0]   # char heat capacity, J/(kg*K)
+        kc =0.8    # char thermal conductivity, W/(m*K)
+
+        cpo = -100+4.4*T[i]-1.57e-3*T[i]**2
+        ko = 0.055
+
+        cpg = 770 + 0.629*T[i] -1.91*1e-4*T[i]**2
+        kg = 0.08
+
+        kv = (kg+ko)/2
+
+        cpx = 4180
+        kx = 0.6
+         # update wood and char density
+        pw[i] = (B[i])*rhow
+        pc[i] = (C[i] + Is[i])*rhow
+        pv = (O[i] + G[i])*rvol
+
+        # update mass fraction vector
+        Yw = np.divide(pw[i] , (pw[i] + pc[i]))*(100-x)/100
+        Ys[i] = ((pw[i] + pc[i])/rhow)
+        Yv[i] = (1-X[i] - Ys[i])
+        por  = (1-(np.divide(Ys[i],B[0]))*(1-0.4))
+
+
+        cpbar = Yw*cpw + (1-Yw)*cpc + por*cpg*G[i] + por*cpo*O[i] + 4180*X[i]     # effective heat capacity
+        kbar = Yw*kw_dsvH + (1-Yw)*kc + por*kv*(G[i]+O[i]) + kx*X[i]      # effective thermal conductivity
+        pbar = pw[i] + pc[i] + X[i]*1000 + pv
+        if i*dt > volatiles_inside_time or np.all(B[i] < 0.001):
+            TheRange = 1
+            if i*dt > volatiles_inside_time:
+                indexer = int(volatiles_inside_time/dt)
+            elif  np.all(B[i] < 0.001):
+                indexer = i
+            if indexer == 0:
+                indexer = 1
+
+            if i == nt-1 or np.all(B[i] < 0.001):
+                TheRange = indexer
+
+            #print(i-indexer)
+            for k in range(TheRange):
+                Csec = 0
+                if i+k - indexer +1 > nt:
+                    break
+                O_out = 0
+                O_out = np.subtract(Oout[i+k - indexer +1],Oout[i+k-indexer] )
+                if k >1:
+                    print('its not over yet{} / {}'.format(k,TheRange))
+                if np.all(O_out <= 0):
+                    print('ERRORR*')
+                    break
+                for j in range(50):
+                    GaoutFinal =0
+
+                    Ctemp,O_temp,GaoutFinal, goutside = kn_secondary_oil(Tinf,O_out, rhow, volatiles_inside_time/50)
+                    Csec += Ctemp
+                    O_out = np.copy(O_temp)
+                    O_temp = 0
+                    Final_gas[i] += GaoutFinal
+                    gOil[i] += goutside
+
+                    if np.all(O_out <= 0):
+                        break
+
+
+                    #O_out[O_out<0] = 0
+                #print(np.min(Oout))
+
+            Final_oil[i] = Final_oil[i-1]+O_out
+            C[i] = C[i]+Csec
+            Final_gas[i] += Final_gas[i-1]
+
+        if i%1000 == 0 or i == nt-1 or np.all(B[i] < 0.001):
+
+
+            print('time step {} out of {}'.format(i,nt))
+            if i == nt-1 or np.all(B[i] < 0.001):
+                T[i:] = T[i]; C[i:] = C[i]; X[i:] = X[i];
+                B[i:] = B[i]; G[i:] = G[i]; O[i:] = O[i];
+                Is[i:] = Is[i]; g[i:] = 0; gOil[i:] = 0 ; g = g+gOil
+                Oout[i:] = Oout[i]; Final_gas = Final_gas + G + Gout;
+                Final_oil[:i] = Final_oil[:i] + O[:i]
+                Final_oil[i:] = Final_oil[i] + O[i]
+                Final_gas[i:] = Final_gas[i]
+
+
+                Final_gas += np.mean(G[-1])
+                Final_oil +=np.mean(O[-1])
+                try:
+                    print(Time_to_max_temp)
+                except:
+                    Time_to_max_temp = i*dt
+
+                return {'T':np.mean(T,axis = 1) ,'C':np.mean(C+Is,axis = 1) ,'B':np.mean(B,axis = 1)  ,'Final Gas':np.mean(Final_gas,axis = 1) ,'Final Oil':np.mean(Final_oil,axis= 1),'Heat of reaction':np.trapz(np.mean(g,axis =1),t),'Heat Energy': np.sum(np.mean(heatEnergy,axis=1)),'Time until 0.1% biomass left[sec]':dt*i,'Time to max temp':Time_to_max_temp,'heating rate':(Tinf-Ti)/Time_to_max_temp}
+
+
+import pandas as pd
+
+Temp = np.linspace(700,1343,13)
+h = np.linspace(100,100,1)
+X = np.linspace(0,50,3)
+t_IN = np.linspace(0.001,2,3)
+
+dfResults = pd.DataFrame(index = range(len(h)*len(Temp)*len(X)*len(t_IN)), columns = ['Vol inside time','h','Moist','T','C','B','Final Gas','Final Oil','Heat of reaction', 'Heat Energy','Time until 0.1% biomass left[sec]','heating rate'])
+
+j = -1
+for Te in Temp:
+    for heat in h:
+        for x in X:
+            for t_in in t_IN:
+                results = al(Te,heat,x,t_in)
+                j += 1
+                print('step {} out of {}'.format(j,len(Temp)*len(h)*len(X)*len(t_IN)))
+                for key in results.keys():
+                    if type(results[key]) == np.ndarray:
+                        dfResults.loc[j,key] =  results[key][-1]
+                    else:
+                        dfResults.loc[j,key] =  results[key]
+                dfResults.loc[j,'h'] = heat
+                dfResults.loc[j,'Moist'] = x
+                dfResults.loc[j,'Vol inside time'] = t_in
